@@ -1,9 +1,10 @@
 package ratelimit
 
 import (
-	"context"
 	"fmt"
 	"net/http"
+
+	"github.com/Brownie44l1/api-gateway/internal/auth"
 )
 
 type RateLimitMiddleware struct {
@@ -20,7 +21,7 @@ func NewRateLimitMiddleware(limiter *RateLimiter) *RateLimitMiddleware {
 func (rlm *RateLimitMiddleware) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get API key from context (set by auth middleware)
-		apiKey, ok := getAPIKeyFromContext(r.Context())
+		apiKey, ok := auth.GetAPIKeyFromContext(r.Context())
 		if !ok {
 			http.Error(w, "Internal error: API key not found in context", http.StatusInternalServerError)
 			return
@@ -44,11 +45,3 @@ func (rlm *RateLimitMiddleware) Middleware(next http.HandlerFunc) http.HandlerFu
 		next(w, r)
 	}
 }
-
-// Helper to get API key from context
-func getAPIKeyFromContext(ctx context.Context) (string, bool) {
-	key, ok := ctx.Value(contextKey("api_key")).(string)
-	return key, ok
-}
-
-type contextKey string
