@@ -8,10 +8,10 @@ import (
 )
 
 var (
-	ErrInvalidToken      = errors.New("invalid token")
-	ErrExpiredToken      = errors.New("token has expired")
-	ErrInvalidSignature  = errors.New("invalid token signature")
-	ErrMissingClaims     = errors.New("missing required claims")
+	ErrInvalidToken     = errors.New("invalid token")
+	ErrExpiredToken     = errors.New("token has expired")
+	ErrInvalidSignature = errors.New("invalid token signature")
+	ErrMissingClaims    = errors.New("missing required claims")
 )
 
 // Claims represents the JWT claims
@@ -62,7 +62,7 @@ func (tm *TokenManager) GetRefreshTokenTTL() time.Duration {
 // GenerateAccessToken creates a new access token
 func (tm *TokenManager) GenerateAccessToken(userID, email string, roles, permissions []string) (string, error) {
 	now := time.Now()
-	
+
 	claims := Claims{
 		UserID:      userID,
 		Email:       email,
@@ -84,7 +84,7 @@ func (tm *TokenManager) GenerateAccessToken(userID, email string, roles, permiss
 // GenerateRefreshToken creates a new refresh token (simpler, longer-lived)
 func (tm *TokenManager) GenerateRefreshToken(userID string) (string, error) {
 	now := time.Now()
-	
+
 	claims := jwt.RegisteredClaims{
 		Issuer:    tm.issuer,
 		Subject:   userID,
@@ -96,10 +96,9 @@ func (tm *TokenManager) GenerateRefreshToken(userID string) (string, error) {
 	return token.SignedString(tm.secretKey)
 }
 
-// ValidateToken validates and parses a JWT token
+// ValidateToken validates and parses an ACCESS token (with full claims)
 func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		// Verify signing method
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, ErrInvalidSignature
 		}
@@ -124,6 +123,36 @@ func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+// ValidateRefreshToken validates a REFRESH token and returns the user ID
+func (tm *TokenManager) ValidateRefreshToken(tokenString string) (string, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, ErrInvalidSignature
+		}
+		return tm.secretKey, nil
+	})
+
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return "", ErrExpiredToken
+		}
+		return "", ErrInvalidToken
+	}
+
+	claims, ok := token.Claims.(*jwt.RegisteredClaims)
+	if !ok || !token.Valid {
+		return "", ErrInvalidToken
+	}
+
+	// Extract user ID from subject
+	userID := claims.Subject
+	if userID == "" {
+		return "", ErrMissingClaims
+	}
+
+	return userID, nil
 }
 
 // RefreshAccessToken validates a refresh token and generates a new access token

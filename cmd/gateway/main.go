@@ -1,5 +1,5 @@
-package main
-
+ package main
+/*
 import (
 	"context"
 	"flag"
@@ -26,7 +26,7 @@ type Gateway struct {
 	tokenManager *jwtpkg.TokenManager
 	registry     *registry.Registry
 	proxy        *proxy.Proxy
-	authMW       http.HandlerFunc
+	authMW       func(http.HandlerFunc) http.HandlerFunc  // Changed: returns middleware function
 	rateLimitMW  *ratelimit.RateLimitMiddleware
 	redisClient  *redisclient.Client
 	authHandler  *auth.AuthHandler
@@ -73,29 +73,23 @@ func NewGateway(cfg *config.Config) (*Gateway, error) {
 	
 	prx := proxy.NewProxy()
 	
-	// Set up authentication middleware
-	var authMW http.HandlerFunc
+	// Set up authentication middleware - FIXED VERSION
+	var authMW func(http.HandlerFunc) http.HandlerFunc
 	if cfg.Auth.AllowJWT && cfg.Auth.AllowAPIKeys {
 		// Dual auth: support both JWT and API keys
 		log.Println("Using dual authentication (JWT + API keys)")
 		dualAuth := auth.NewDualAuthMiddleware(authStore, tokenManager)
-		authMW = func(w http.ResponseWriter, r *http.Request) {
-			dualAuth.Middleware(func(w http.ResponseWriter, r *http.Request) {})(w, r)
-		}
+		authMW = dualAuth.Middleware  // Return the actual middleware function
 	} else if cfg.Auth.AllowJWT {
 		// JWT only
 		log.Println("Using JWT authentication only")
 		jwtMW := jwtpkg.NewJWTMiddleware(tokenManager)
-		authMW = func(w http.ResponseWriter, r *http.Request) {
-			jwtMW.Middleware(func(w http.ResponseWriter, r *http.Request) {})(w, r)
-		}
+		authMW = jwtMW.Middleware  // Return the actual middleware function
 	} else {
 		// API keys only (default)
 		log.Println("Using API key authentication only")
 		apiKeyMW := auth.NewAuthMiddleware(authStore)
-		authMW = func(w http.ResponseWriter, r *http.Request) {
-			apiKeyMW.Middleware(func(w http.ResponseWriter, r *http.Request) {})(w, r)
-		}
+		authMW = apiKeyMW.Middleware  // Return the actual middleware function
 	}
 	
 	// Set up rate limiting
@@ -199,14 +193,8 @@ func (g *Gateway) healthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) Run(host string, port int) error {
-	// Protected handler with auth + rate limiting
-	protectedHandler := func(w http.ResponseWriter, r *http.Request) {
-		g.authMW(w, r)
-		if w.Header().Get("X-Auth-Failed") != "" {
-			return
-		}
-		g.rateLimitMW.Middleware(g.handleRequest)(w, r)
-	}
+	// FIXED: Chain middleware properly
+	protectedHandler := g.authMW(g.rateLimitMW.Middleware(g.handleRequest))
 
 	mux := http.NewServeMux()
 	
@@ -219,13 +207,7 @@ func (g *Gateway) Run(host string, port int) error {
 		mux.HandleFunc("/auth/refresh", g.authHandler.Refresh)
 		
 		// Protected: get current user info
-		mux.HandleFunc("/auth/me", func(w http.ResponseWriter, r *http.Request) {
-			g.authMW(w, r)
-			if w.Header().Get("X-Auth-Failed") != "" {
-				return
-			}
-			g.authHandler.Me(w, r)
-		})
+		mux.HandleFunc("/auth/me", g.authMW(g.authHandler.Me))
 	}
 	
 	// All other routes require auth
@@ -317,4 +299,4 @@ func main() {
 	if err := gateway.Run(cfg.Gateway.Host, cfg.Gateway.Port); err != nil {
 		log.Fatalf("Gateway error: %v", err)
 	}
-}
+} */

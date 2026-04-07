@@ -127,15 +127,16 @@ func (ah *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user from refresh token to fetch current roles/permissions
-	// In production, you'd extract user ID and look up latest roles
-	claims, err := ah.tokenManager.ValidateToken(req.RefreshToken)
+	// FIXED: Use ValidateRefreshToken instead of ValidateToken
+	// Refresh tokens have a simpler structure (just user ID in subject)
+	userID, err := ah.tokenManager.ValidateRefreshToken(req.RefreshToken)
 	if err != nil {
 		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	user, err := ah.userStore.GetUser(claims.UserID)
+	// Get user to fetch current roles/permissions
+	user, err := ah.userStore.GetUser(userID)
 	if err != nil {
 		http.Error(w, "User not found", http.StatusUnauthorized)
 		return
