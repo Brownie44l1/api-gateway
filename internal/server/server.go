@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"time"
 
@@ -11,18 +12,52 @@ import (
 
 	"github.com/Brownie44l1/api-gateway/internal/config"
 	"github.com/Brownie44l1/api-gateway/internal/middleware"
+	"github.com/Brownie44l1/rate-limiter/ratelimiter"
 )
 
-func New(cfg *config.Config) http.Handler {
+func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 	r := chi.NewRouter()
 
-	// chi's built-in request logger, just for now
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 
+	// per-IP rate limiter — for public routes
+	// we don't know who they are yet, so IP is the best we have
+	ipLimiter := rl.Middleware(ratelimiter.Config{
+		Limit:      20, // stricter on public routes
+		RefillRate: 20, // 1 per 3 seconds steady state
+		KeyLookup: func(r *http.Request) string {
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				return "ip:" + r.RemoteAddr // fallback
+			}
+			return "ip:" + ip
+		},
+	})
+
+	// per-user rate limiter — for authenticated routes
+	// we know who they are, so we limit by user ID
+	userLimiter := rl.Middleware(ratelimiter.Config{
+		Limit:      cfg.RateLimit,
+		RefillRate: cfg.RateRefill,
+		KeyLookup: func(r *http.Request) string {
+			user, ok := middleware.UserFromContext(r.Context())
+			if !ok {
+				ip, _, err := net.SplitHostPort(r.RemoteAddr)
+				if err != nil {
+					return "ip:" + r.RemoteAddr
+				}
+				return "ip:" + ip
+			}
+			return "user:" + user.ID
+		},
+	})
+
 	// public routes — no auth needed
 	r.Group(func(r chi.Router) {
+		r.Use(ipLimiter)
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"status":"ok"}`))
 		})
 		r.Post("/auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -63,9 +98,10 @@ func New(cfg *config.Config) http.Handler {
 		})
 	})
 
-	// protected routes — auth required
+	// protected routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Authenticate(cfg.JWTSecret))
+		r.Use(userLimiter) // ← runs after auth, so user is on context
 
 		r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
 			user, _ := middleware.UserFromContext(r.Context())
@@ -75,7 +111,6 @@ func New(cfg *config.Config) http.Handler {
 			})
 		})
 
-		// only admins
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireRole("admin"))
 			r.Get("/admin/dashboard", func(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +118,6 @@ func New(cfg *config.Config) http.Handler {
 			})
 		})
 
-		// only internal services
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireRole("service"))
 			r.Get("/internal/stats", func(w http.ResponseWriter, r *http.Request) {
