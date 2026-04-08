@@ -2,7 +2,7 @@ package config
 
 import "os"
 
-//Everything we need to know/ use.
+//Everything we need to know
 
 type Config struct {
 	Port string
