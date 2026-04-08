@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -46,8 +47,7 @@ func Authenticate(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// [Authorization] --------------------------------------
-
+			// extract identity from claims and attach to context
 			user := &AuthenticatedUser{
 				ID:    claims["user_id"].(string),
 				Roles: []string{},
@@ -65,8 +65,34 @@ func Authenticate(secret string) func(http.Handler) http.Handler {
 			// attach user to context so downstream handlers can read it
 			ctx := context.WithValue(r.Context(), userContextKey, user)
 
-			// Step 7: Call next — let the request through
+			// pass the request forward with the user attached
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func RequireRole(roles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+			// Step 1: read the user from context
+			user, ok := UserFromContext(r.Context())
+			if !ok {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+
+			// Step 2: check if any of the user's roles match the required roles
+			for _, required := range roles {
+				if slices.Contains(user.Roles, required) {
+					// Step 3: match found, let them through
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			// Step 4: no match found, shut it down
+			http.Error(w, `{"error":"forbidden, insufficient permissions"}`, http.StatusForbidden)
 		})
 	}
 }
