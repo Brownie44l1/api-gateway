@@ -12,20 +12,25 @@ import (
 
 	"github.com/Brownie44l1/api-gateway/internal/config"
 	"github.com/Brownie44l1/api-gateway/internal/middleware"
+	"github.com/Brownie44l1/api-gateway/internal/proxy"
 	"github.com/Brownie44l1/rate-limiter/ratelimiter"
 )
 
 func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 	r := chi.NewRouter()
 
+	p, err := proxy.New(proxy.Default())
+	if err != nil {
+		panic(err)
+	}
+
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 
 	// global middleware — runs on every single request
-    r.Use(middleware.StripHeaders)                    // strip lying headers first
-    r.Use(middleware.RequireJSON)                     // enforce content type
-    r.Use(middleware.MaxBodySize(1 << 20))            // 1MB limit on all routes
-
+	r.Use(middleware.StripHeaders)         // strip lying headers first
+	r.Use(middleware.RequireJSON)          // enforce content type
+	r.Use(middleware.MaxBodySize(1 << 20)) // 1MB limit on all routes
 
 	// per-IP rate limiter — for public routes
 	// we don't know who they are yet, so IP is the best we have
@@ -132,6 +137,8 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 			})
 		})
 	})
+
+	r.Handle("/*", p.Handler())
 
 	return r
 }
