@@ -21,6 +21,12 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 
+	// global middleware — runs on every single request
+    r.Use(middleware.StripHeaders)                    // strip lying headers first
+    r.Use(middleware.RequireJSON)                     // enforce content type
+    r.Use(middleware.MaxBodySize(1 << 20))            // 1MB limit on all routes
+
+
 	// per-IP rate limiter — for public routes
 	// we don't know who they are yet, so IP is the best we have
 	ipLimiter := rl.Middleware(ratelimiter.Config{
@@ -102,6 +108,7 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Authenticate(cfg.JWTSecret))
 		r.Use(userLimiter) // ← runs after auth, so user is on context
+		r.Use(middleware.InjectHeaders)
 
 		r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
 			user, _ := middleware.UserFromContext(r.Context())
