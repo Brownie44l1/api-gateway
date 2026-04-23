@@ -18,6 +18,7 @@ import (
 
 func main() {
 	cfg := config.Load()
+	fmt.Printf("AdminUsers: %v\n", cfg.AdminUsers)
 
 	rl, err := ratelimiter.NewClient(cfg.RedisAddr, cfg.RedisPassword)
 	if err != nil {

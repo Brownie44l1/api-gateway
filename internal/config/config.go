@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -14,6 +15,8 @@ type Config struct {
 	// Auth
 	JWTSecret string
 	JWTExpiry time.Duration // how long tokens live
+
+	AdminUsers []string //users that can be upgraded to an Admin.
 
 	// Redis
 	RedisAddr     string
@@ -45,6 +48,8 @@ func Load() *Config {
 
 		JWTSecret: getEnv("JWT_SECRET", "change-me-in-production"),
 		JWTExpiry: getDuration("JWT_EXPIRY", 15*time.Minute),
+
+		AdminUsers: getStringSlice("ADMIN_USER", nil), 
 
 		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6379"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
@@ -94,6 +99,13 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		if d, err := time.ParseDuration(val); err == nil {
 			return d
 		}
+	}
+	return fallback
+}
+
+func getStringSlice(key string, fallback []string) []string {
+	if val := os.Getenv(key); val != "" {
+		return strings.Split(val, ",")
 	}
 	return fallback
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -93,6 +94,9 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 			}
 
 			roles := []string{"user"}
+			if len(cfg.AdminUsers) > 0 && slices.Contains(cfg.AdminUsers, body.UserID) {
+				roles = []string{"admin"}
+			}
 
 			claims := jwt.MapClaims{
 				"user_id": body.UserID,
