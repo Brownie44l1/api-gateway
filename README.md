@@ -90,8 +90,8 @@ Access tokens expire in 15 minutes. Signed with HS256.
 - [x] Phase 1 — JWT authentication
 - [x] Phase 2 — Role-based authorization
 - [x] Phase 3 — Token bucket rate limiting
-- [ ] Phase 4 — Request validation
-- [ ] Phase 5 — Routing & proxy
+- [x] Phase 4 — Request validation
+- [x] Phase 5 — Routing & proxy
 - [ ] Phase 6 — Caching
 - [ ] Phase 7 — Observability & logging
 - [ ] Phase 8 — Security hardening
