@@ -37,6 +37,10 @@ type Config struct {
 	CBMaxFailures  int           // failures before opening
 	CBResetTimeout time.Duration // how long before half-open retry
 
+	// Caching
+	CacheTTL time.Duration // how long to cache responses
+	CacheEnabled bool      // whether caching is enabled
+
 	// Upstream routes — comma-separated "prefix:upstream:timeout_seconds"
 	// e.g. /api/users:http://localhost:3001:5,/api/posts:http://localhost:3002:5
 	RoutesRaw string
@@ -64,6 +68,9 @@ func Load() *Config {
 
 		CBMaxFailures:  getInt("CB_MAX_FAILURES", 5),
 		CBResetTimeout: getDuration("CB_RESET_TIMEOUT", 30*time.Second),
+
+		CacheTTL:     getDuration("CACHE_TTL", 5*time.Minute),
+		CacheEnabled: getEnv("CACHE_ENABLED", "false") == "true",
 
 		RoutesRaw: getEnv("ROUTES", "/api/users:http://localhost:3001:5,/api/posts:http://localhost:3002:5"),
 	}

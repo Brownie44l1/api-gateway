@@ -71,3 +71,9 @@ func (cb *CircuitBreaker) Failure() {
         cb.state = open
     }
 }
+
+func (cb *CircuitBreaker) State() state {
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+    return cb.state
+}

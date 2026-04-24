@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Brownie44l1/api-gateway/internal/cache"
+	"github.com/Brownie44l1/api-gateway/internal/metrics"
 )
 
 // Proxy holds a reverse proxy and circuit breaker per upstream route.
@@ -16,6 +20,7 @@ type Proxy struct {
 	routes   []Route
 	breakers map[string]*CircuitBreaker
 	proxies  map[string]*httputil.ReverseProxy
+	cache    *cache.Cache
 	mu       sync.RWMutex
 
 	cbMaxFailures  int
@@ -28,6 +33,7 @@ type Options struct {
 	CBMaxFailures  int
 	CBResetTimeout time.Duration
 	DefaultTimeout time.Duration // fallback when route.Timeout == 0
+	Cache          *cache.Cache
 }
 
 // New builds a Proxy from a Config.
@@ -47,6 +53,7 @@ func New(cfg *Config, opts Options) (*Proxy, error) {
 		routes:         cfg.Routes,
 		breakers:       make(map[string]*CircuitBreaker),
 		proxies:        make(map[string]*httputil.ReverseProxy),
+		cache:          opts.Cache,
 		cbMaxFailures:  opts.CBMaxFailures,
 		cbResetTimeout: opts.CBResetTimeout,
 		defaultTimeout: opts.DefaultTimeout,
@@ -110,18 +117,63 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		}
 
 		if !breaker.Allow() {
+			metrics.RateLimitHits.WithLabelValues("circuit_breaker").Inc()
 			http.Error(w, `{"error":"service temporarily unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
 
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-		rp.ServeHTTP(wrapped, r)
+		p.serveWithCache(w, r, route.Prefix, rp, breaker)
+	}
+}
 
-		if wrapped.statusCode >= 500 {
-			breaker.Failure()
-		} else {
-			breaker.Success()
+func (p *Proxy) serveWithCache(w http.ResponseWriter, r *http.Request, prefix string, rp *httputil.ReverseProxy, breaker *CircuitBreaker) {
+	path := r.URL.Path
+	query := r.URL.RawQuery
+
+	if p.cache != nil && r.Method == "GET" {
+		if cached, ok := p.cache.Get(r.Context(), path, query); ok {
+			metrics.CacheHits.WithLabelValues(path).Inc()
+			for k, v := range cached.Headers {
+				w.Header().Set(k, v)
+			}
+			w.WriteHeader(cached.StatusCode)
+			w.Write([]byte(cached.Body))
+			return
 		}
+		metrics.CacheMisses.WithLabelValues(path).Inc()
+	}
+
+	wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+	upstream := ""
+	if rp.Director != nil {
+		upstream = prefix
+	}
+	start := time.Now()
+	rp.ServeHTTP(wrapped, r)
+	elapsed := time.Since(start).Seconds()
+
+	if upstream != "" {
+		metrics.UpstreamRequests.WithLabelValues(upstream, fmt.Sprintf("%d", wrapped.statusCode)).Inc()
+		metrics.UpstreamLatency.WithLabelValues(upstream).Observe(elapsed)
+	}
+
+	if wrapped.statusCode >= 500 {
+		breaker.Failure()
+	} else {
+		breaker.Success()
+	}
+
+	metrics.CircuitBreakerState.WithLabelValues(prefix).Set(float64(breaker.State()))
+
+	if p.cache != nil && r.Method == "GET" && wrapped.statusCode == 200 && wrapped.body != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		p.cache.Set(ctx, path, query, &cache.Response{
+			Body:       string(wrapped.body),
+			StatusCode: wrapped.statusCode,
+			Headers:    map[string]string{},
+			Timestamp:  time.Now(),
+		})
 	}
 }
 
@@ -147,13 +199,19 @@ func (p *Proxy) match(path string) (*Route, *httputil.ReverseProxy, *CircuitBrea
 	return matched, p.proxies[matched.Prefix], p.breakers[matched.Prefix]
 }
 
-// responseWriter wraps http.ResponseWriter to capture the status code.
+// responseWriter wraps http.ResponseWriter to capture the status code and body.
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
+	body       []byte
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	rw.body = append(rw.body, b...)
+	return rw.ResponseWriter.Write(b)
 }

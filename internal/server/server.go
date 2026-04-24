@@ -10,7 +10,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/Brownie44l1/api-gateway/internal/cache"
 	"github.com/Brownie44l1/api-gateway/internal/config"
 	"github.com/Brownie44l1/api-gateway/internal/middleware"
 	"github.com/Brownie44l1/api-gateway/internal/proxy"
@@ -25,27 +27,31 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 		panic("invalid ROUTES config: " + err.Error())
 	}
 
+	var c *cache.Cache
+	if cfg.CacheEnabled {
+		c = cache.New(cfg.RedisAddr, cfg.RedisPassword, cfg.CacheTTL)
+	}
+
 	p, err := proxy.New(routesCfg, proxy.Options{
 		CBMaxFailures:  cfg.CBMaxFailures,
 		CBResetTimeout: cfg.CBResetTimeout,
+		Cache:          c,
 	})
 	if err != nil {
 		panic(err)
 	}
 
-	// request ID first — everything downstream can log it
 	r.Use(middleware.RequestID)
-	r.Use(middleware.StructuredLogger) // structured slog, replaces chimiddleware.Logger
+	r.Use(middleware.Metrics)
+	r.Use(middleware.StructuredLogger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(middleware.SecurityHeaders)
 
-	// global middleware — runs on every single request
-	r.Use(middleware.StripHeaders)                    // strip lying headers first
-	r.Use(middleware.RequireJSON)                     // enforce content type
-	r.Use(middleware.MaxBodySize(cfg.MaxBodyBytes))   // configurable body limit
-	r.Use(middleware.ValidateBody)                    // validate request body
+	r.Use(middleware.StripHeaders)
+	r.Use(middleware.RequireJSON)
+	r.Use(middleware.MaxBodySize(cfg.MaxBodyBytes))
+	r.Use(middleware.ValidateBody)
 
-	// per-IP rate limiter — public routes
 	ipLimiter := rl.Middleware(ratelimiter.Config{
 		Limit:      cfg.IPRateLimit,
 		RefillRate: cfg.IPRateRefill,
@@ -58,7 +64,6 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 		},
 	})
 
-	// per-user rate limiter — authenticated routes
 	userLimiter := rl.Middleware(ratelimiter.Config{
 		Limit:      cfg.RateLimit,
 		RefillRate: cfg.RateRefill,
@@ -75,13 +80,19 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 		},
 	})
 
-	// public routes — no auth needed
 	r.Group(func(r chi.Router) {
 		r.Use(ipLimiter)
 
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			status := "ok"
+			if c != nil {
+				if err := c.Ping(ctx); err != nil {
+					status = "unhealthy"
+				}
+			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"status":"ok"}`))
+			w.Write([]byte(`{"status":"` + status + `"}`))
 		})
 
 		r.Post("/auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +130,6 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 		})
 	})
 
-	// protected routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Authenticate(cfg.JWTSecret))
 		r.Use(userLimiter)
@@ -149,6 +159,8 @@ func New(cfg *config.Config, rl *ratelimiter.Client) http.Handler {
 	})
 
 	r.Handle("/*", p.Handler())
+
+	r.Method(http.MethodGet, "/metrics", promhttp.Handler())
 
 	return r
 }
